@@ -4,8 +4,6 @@ import warnings
 import io
 import matplotlib.pyplot as plt
 import matplotlib
-
-# Backend для non-interactive режима
 matplotlib.use('Agg')
 
 from astropy.coordinates import SkyCoord
@@ -23,7 +21,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Константы колонок (как в оригинале)
 GAIA_G = "Gaia_phot_g_mean_mag"
 GAIA_BP = "Gaia_phot_bp_mean_mag"
 GAIA_RP = "Gaia_phot_rp_mean_mag"
@@ -38,16 +35,10 @@ TMASS_RDFLAG = "2MASS_Rflg"
 TMASS_BLFLAG = "2MASS_Bflg"
 TMASS_CCFLAG = "2MASS_Cflg"
 
-# Коэффициенты экстинкции Gaia EDR3
 AG_over_EBV = 2.74
 ABP_over_EBV = 3.61
 ARP_over_EBV = 2.27
 EG_over_EBV = ABP_over_EBV - ARP_over_EBV  # ~1.34
-
-
-# ---------------------------
-# Загрузка данных
-# ---------------------------
 
 def collect_gaia_data(ra, dec, radius_deg):
     center_coord = SkyCoord(ra=ra, dec=dec,
@@ -110,11 +101,6 @@ def collect_2mass_data(ra, dec, radius_deg):
     logger.info("2MASS: %d источников", len(tab))
     return tab
 
-
-# ---------------------------
-# Матчинг
-# ---------------------------
-
 def _get_tmass_coord_columns(tmass_table):
     preferred_pairs = [
         ("RAJ2000", "DEJ2000"),
@@ -175,11 +161,6 @@ def cross_match_gaia_2mass(gaia_table, tmass_table, radius_arcsec=1.0):
     )
     return out
 
-
-# ---------------------------
-# Фильтры
-# ---------------------------
-
 def apply_gaia_filters(tab):
     needed = [GAIA_G, GAIA_BP, GAIA_RP, GAIA_BP_RP_EXCESS, GAIA_RUWE]
     for col in needed:
@@ -233,33 +214,19 @@ def filter_combined_table(tab):
     t = apply_2mass_filters(t)
     return t
 
-
-# ---------------------------
-# Главная последовательность и цвета
-# ---------------------------
-
 def ms_MG_from_color(bp_rp0):
-    """
-    Кусочная главная последовательность в системе Gaia:
-    опорные точки (BP-RP)_0, M_G для карликов.[web:6]
-    """
     bp_rp_grid = np.array([-0.2, 0.0, 0.3, 0.6, 1.0, 1.5, 2.0])
     MG_grid = np.array([1.5, 2.0, 3.0, 4.2, 5.5, 7.0, 9.0])
     return np.interp(bp_rp0, bp_rp_grid, MG_grid, left=np.nan, right=np.nan)
 
 
 def ms_color_from_G(Gmag):
-    """
-    Обратная зависимость: (BP-RP)_0 как функция M_G ~ G0 для MS.[web:6]
-    Используется для оценки смещения по цвету на CMD.
-    """
     G_grid = np.array([2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
     C_grid = np.array([0.0, 0.2, 0.4, 0.7, 0.95, 1.2, 1.4, 1.6, 1.8])
     return np.interp(Gmag, G_grid, C_grid, left=np.nan, right=np.nan)
 
 
 def add_color_columns(tab):
-    """Добавить явные цветовые индексы."""
     if len(tab) == 0:
         return tab
 
@@ -280,16 +247,7 @@ def add_color_columns(tab):
 
     return tab
 
-
-# ---------------------------
-# Покраснение
-# ---------------------------
-
 def estimate_reddening_advanced(tab):
-    """
-    Оценка E(G_BP - G_RP) по смещению относительно главной последовательности
-    на диаграмме G vs (G_BP - G_RP), затем перевод в E(B-V) и A_G, A_BP, A_RP.[web:6][web:7][web:11]
-    """
     if len(tab) == 0 or "color_Gbp_Grp" not in tab.colnames or GAIA_G not in tab.colnames:
         return {
             "E_Gbp_Grp_med": np.nan,
@@ -302,8 +260,6 @@ def estimate_reddening_advanced(tab):
     color_obs = np.array(tab["color_Gbp_Grp"])
     G = np.array(tab[GAIA_G])
 
-    # Для ярких/относительно близких звёзд можно использовать G как приближение M_G
-    # или, если есть параллаксы, можно отфильтроваться по d_geo < ~2 кпк.
     mask_finite = np.isfinite(color_obs) & np.isfinite(G)
     if np.sum(mask_finite) == 0:
         return {
@@ -317,7 +273,6 @@ def estimate_reddening_advanced(tab):
     G_use = G[mask_finite]
     color_use = color_obs[mask_finite]
 
-    # Ожидаемый цвет главной последовательности при данном G0 ~ G
     color_ms = ms_color_from_G(G_use)
 
     mask_ms = np.isfinite(color_ms)
@@ -333,12 +288,8 @@ def estimate_reddening_advanced(tab):
     color_use = color_use[mask_ms]
     color_ms = color_ms[mask_ms]
 
-    # Цветовой избыток
     E_G = color_use - color_ms
-    # Медианная оценка покраснения
     E_Gbp_Grp_med = float(np.median(E_G))
-
-    # Перевод в E(B-V) через коэффициент EG_over_EBV ~ 1.34.[web:7]
     E_BV = E_Gbp_Grp_med / EG_over_EBV
 
     A_G = AG_over_EBV * E_BV
@@ -353,22 +304,11 @@ def estimate_reddening_advanced(tab):
         "A_RP": float(A_RP),
     }
 
-
-# ---------------------------
-# Расстояния
-# ---------------------------
-
 def add_distance_columns(tab):
-    """
-    Добавить колонки:
-    - геометрическое расстояние по параллаксу;
-    - фотометрическое расстояние по dereddened G0 и (BP-RP)_0.
-    """
     n = len(tab)
     if n == 0:
         return tab
 
-    # Геометрическое расстояние (парсеки) из параллакса
     if GAIA_PARALLAX in tab.colnames:
         parallax = np.array(tab[GAIA_PARALLAX])
         dist_geo = np.full(n, np.nan)
@@ -378,8 +318,6 @@ def add_distance_columns(tab):
     else:
         tab["dist_geo_pc"] = np.full(n, np.nan)
 
-    # Фотометрическое расстояние:
-    # сначала оценим покраснение по всей таблице
     if GAIA_G in tab.colnames and "color_Gbp_Grp" in tab.colnames:
         red = estimate_reddening_advanced(tab)
         E_G = red["E_Gbp_Grp_med"]
@@ -406,13 +344,7 @@ def add_distance_columns(tab):
 
     return tab
 
-
-# ---------------------------
-# Статистика распределений
-# ---------------------------
-
 def compute_distribution_stats(values):
-    """Вернуть min, max, mean, median, std для 1D массива."""
     values = np.array(values)
     mask = np.isfinite(values)
     if np.sum(mask) == 0:
@@ -429,19 +361,11 @@ def compute_distribution_stats(values):
 
 
 def build_stats_table(matched, filtered, region_name):
-    """
-    Статистика:
-    - число источников до/после фильтров;
-    - базовая статистика по G;
-    - базовая статистика по цветам;
-    - оценки покраснения и extinction.
-    """
     stats = Table()
     stats["region"] = [region_name]
     stats["n_matched"] = [len(matched)]
     stats["n_filtered"] = [len(filtered)]
 
-    # Статистика по G
     if len(filtered) > 0 and GAIA_G in filtered.colnames:
         G = filtered[GAIA_G]
         g_stats = compute_distribution_stats(G)
@@ -454,7 +378,6 @@ def build_stats_table(matched, filtered, region_name):
         for name in ["G_min", "G_max", "G_mean", "G_median", "G_std"]:
             stats[name] = [np.nan]
 
-    # Цвета
     if len(filtered) > 0 and "color_Gbp_Grp" in filtered.colnames:
         c_stats = compute_distribution_stats(filtered["color_Gbp_Grp"])
         stats["C_Gbp_Grp_min"] = [c_stats["min"]]
@@ -479,7 +402,6 @@ def build_stats_table(matched, filtered, region_name):
                      "C_J_Ks_mean", "C_J_Ks_median", "C_J_Ks_std"]:
             stats[name] = [np.nan]
 
-    # Покраснение и extinction по отфильтрованной выборке
     red = estimate_reddening_advanced(filtered)
     stats["E_Gbp_Grp_med"] = [red["E_Gbp_Grp_med"]]
     stats["E_BV"] = [red["E_BV"]]
@@ -489,30 +411,14 @@ def build_stats_table(matched, filtered, region_name):
 
     return stats
 
-
-# ---------------------------
-# Построение изображений
-# ---------------------------
-
 def figure_to_array(fig):
-    """
-    ПРАВИЛЬНАЯ версия для FigureCanvasAgg: memoryview -> RGB array
-    """
     fig.canvas.draw()
     
-    # buffer_rgba() возвращает memoryview
     buf = fig.canvas.buffer_rgba()
-    w, h = fig.canvas.get_width_height()
-    
-    # memoryview -> numpy array -> reshape
+    w, h = fig.canvas.get_width_height()   
     img = np.frombuffer(buf, dtype=np.uint8).reshape((h, w, 4))
-    
-    # RGB без альфа-канала
     rgb = img[:, :, :3]
-    
-    # Переворачиваем вертикально для правильной ориентации
     rgb = np.flipud(rgb)
-    
     plt.close(fig)
     return rgb
 
@@ -571,11 +477,9 @@ def make_hist_image(values, xlabel, title):
 
 
 def save_full_fits(region_name, matched, filtered, stats):
-    # Диаграммы CMD и TCD
     cmd_img = make_cmd_image(filtered, f"CMD {region_name}")
     tcd_img = make_tcd_image(filtered, f"TCD {region_name}")
 
-    # Гистограммы для G и цветов
     if len(filtered) > 0 and GAIA_G in filtered.colnames:
         G = filtered[GAIA_G]
         g_hist_img = make_hist_image(G, "G", f"G histogram {region_name}")
@@ -623,11 +527,6 @@ def save_full_fits(region_name, matched, filtered, stats):
     hdul.writeto(fname, overwrite=True)
     logger.info("Сохранён полный FITS для %s: %s", region_name, fname)
 
-
-# ---------------------------
-# Обработка областей
-# ---------------------------
-
 def process_region(ra, dec, radius_deg, region_name):
     gaia = collect_gaia_data(ra, dec, radius_deg)
     tmass = collect_2mass_data(ra, dec, radius_deg)
@@ -641,10 +540,6 @@ def process_region(ra, dec, radius_deg, region_name):
         logger.warning("Нет совпадений в области %s", region_name)
         return None
 
-    # Добавляем цвета и расстояния до фильтров/статистики
-    matched = add_color_columns(matched)
-    matched = add_distance_columns(matched)
-
     filtered = filter_combined_table(matched)
     filtered = add_color_columns(filtered)
     filtered = add_distance_columns(filtered)
@@ -656,6 +551,5 @@ def process_region(ra, dec, radius_deg, region_name):
 
 
 if __name__ == "__main__":
-    # Пример: две области и объединённая
     result1 = process_region("14h00m00s", "30d00m00s", 0.5, "region1")
     result2 = process_region("18h00m00s", "-25d00m00s", 0.2, "region2")
